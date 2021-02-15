@@ -1,0 +1,21 @@
+[package]
+name = "rustedfoil_server"
+version = "0.1.0"
+authors = ["nekoinemo <nekoinemo@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+log = { version = "0.4", features = ["std", "release_max_level_info"] }
+pretty_env_logger = "0.4"
+
+dotenv = "0.15"
+percent-encoding = "2.1"
+serde = "1.0"
+walkdir = "2.3"
+
+listenfd = "0.3"
+actix-web = { version = "3.3", features = ["openssl"] }
+actix-web-httpauth = "0.5"
+actix-rt = "1.1.1"
+actix-files = "0.4"
+openssl = "0.10"
