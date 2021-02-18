@@ -14,8 +14,7 @@ serde = "1.0"
 walkdir = "2.3"
 
 listenfd = "0.3"
-actix-web = { version = "3.3", features = ["openssl"] }
+actix-web = "3.3"
 actix-web-httpauth = "0.5"
 actix-rt = "1.1.1"
 actix-files = "0.4"
-openssl = "0.10"

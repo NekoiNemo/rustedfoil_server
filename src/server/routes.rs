@@ -145,8 +145,8 @@ struct IndexOut {
 
 struct TinfoilRequestHeaders<'a> {
     uid: Option<&'a str>,
-    version: Option<&'a str>,
-    referrer: Option<&'a str>,
+    _version: Option<&'a str>,
+    _referrer: Option<&'a str>,
 }
 
 fn header_value_lossy<'a>(req: &'a HttpRequest, name: &str) -> Option<&'a str> {
@@ -161,8 +161,8 @@ impl<'a> TinfoilRequestHeaders<'a> {
 
         TinfoilRequestHeaders {
             uid,
-            version,
-            referrer,
+            _version: version,
+            _referrer: referrer,
         }
     }
 }
