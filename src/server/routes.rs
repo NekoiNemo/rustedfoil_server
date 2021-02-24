@@ -1,34 +1,45 @@
-use actix_files::NamedFile;
-use actix_web::web::{self, ServiceConfig};
-use actix_web::{HttpRequest, HttpResponse, Responder};
-use actix_web_httpauth::extractors::basic::{BasicAuth, Config as BasicConfig};
-use actix_web_httpauth::extractors::AuthenticationError;
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use std::convert::Infallible;
+use std::sync::Arc;
+
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
+use warp::{Filter, reject, Rejection, Reply};
+use warp::filters::BoxedFilter;
+use warp::http::Response;
+use warp::hyper::Body;
 
 use crate::switch::SwitchService;
 
-pub fn root(cfg: &mut ServiceConfig) {
-    cfg.route("/", web::get().to(index))
-        .route("/scan", web::post().to(scan))
-        .route("/file", web::get().to(serve_file));
+pub fn root(switch_service: Arc<SwitchService>) -> BoxedFilter<(impl Reply, )> {
+    let index = with_switch_service(switch_service.clone())
+        .and(warp::path::end())
+        .and(warp::get())
+        .and_then(index_handler);
+
+    let file = with_switch_service(switch_service.clone())
+        .and(warp::path!("file"))
+        .and(warp::get())
+        .and(warp::query::query::<ServeFileQuery>())
+        .and_then(file_handler);
+
+    let scan = with_switch_service(switch_service.clone())
+        .and(warp::path!("scan"))
+        .and(warp::post())
+        .and_then(scan_handler);
+
+    index
+        .or(file)
+        .or(scan)
+        .boxed()
 }
 
-async fn index(
-    req: HttpRequest,
-    auth: BasicAuth,
-    switch_service: web::Data<SwitchService>,
-) -> impl Responder {
-    let tinfoil_headers = TinfoilRequestHeaders::from_req(&req);
+fn with_switch_service(
+    switch_service: Arc<SwitchService>
+) -> impl Filter<Extract=(Arc<SwitchService>, ), Error=Infallible> + Clone {
+    warp::any().map(move || switch_service.clone())
+}
 
-    let uid: &str = &tinfoil_headers.uid.unwrap_or("[empty]");
-    log::info!(
-        "{ip}, {user}, UID:{uid} | Requesting index",
-        ip = req.connection_info().remote_addr().unwrap_or("unknown"),
-        user = auth.user_id(),
-        uid = uid
-    );
-
+async fn index_handler(switch_service: Arc<SwitchService>) -> Result<impl Reply, Rejection> {
     let files: Vec<FileOut> = switch_service
         .list_files()
         .iter()
@@ -57,64 +68,25 @@ async fn index(
         referrer: None,
     };
 
-    HttpResponse::Ok().json(result)
+    Ok(warp::reply::json(&result))
 }
 
-async fn serve_file(
-    req: HttpRequest,
-    auth: BasicAuth,
-    switch_service: web::Data<SwitchService>,
-    query: web::Query<ServeFileQuery>,
-) -> impl Responder {
+async fn file_handler(switch_service: Arc<SwitchService>, query: ServeFileQuery) -> Result<Response<Body>, Rejection> {
     if let Some(path) = switch_service.resolve_file(&query.path) {
-        log::info!(
-            r#"{ip}, {user} | Requesting file "{}""#,
-            &query.path,
-            ip = req.connection_info().remote_addr().unwrap_or("unknown"),
-            user = auth.user_id(),
-        );
-
-        let file = NamedFile::open(&path).unwrap();
-
-        file.into_response(&req).unwrap()
+        Ok(super::file::file_reply(&path).await)
     } else {
-        log::warn!(
-            r#"{ip}, {user} | Requesting non-existing file "{}""#,
-            &query.path,
-            ip = req.connection_info().remote_addr().unwrap_or("unknown"),
-            user = auth.user_id(),
-        );
-
-        HttpResponse::NotFound().finish()
+        Err(reject::not_found())
     }
 }
 
-async fn scan(
-    req: HttpRequest,
-    auth: BasicAuth,
-    switch_service: web::Data<SwitchService>,
-) -> impl Responder {
-    if auth.user_id() != "admin" {
-        let config = req
-            .app_data::<BasicConfig>()
-            .map(|data| data.clone())
-            .unwrap_or_else(Default::default);
-        let err = AuthenticationError::from(config);
-
-        return HttpResponse::from_error(err.into());
-    }
-
-    log::info!(
-        "{ip}, {user} | Requesting re-scan",
-        ip = req.connection_info().remote_addr().unwrap_or("unknown"),
-        user = auth.user_id()
-    );
-
+async fn scan_handler(switch_service: Arc<SwitchService>) -> Result<impl Reply, Rejection> {
     let before = switch_service.list_files().len();
     switch_service.scan();
     let after = switch_service.list_files().len();
 
-    HttpResponse::Ok().json(ScanReport { before, after })
+    let result = ScanReport { before, after };
+
+    Ok(warp::reply::json(&result))
 }
 
 #[derive(Deserialize)]
@@ -141,28 +113,4 @@ struct IndexOut {
     directories: Vec<String>,
     success: Option<String>,
     referrer: Option<String>,
-}
-
-struct TinfoilRequestHeaders<'a> {
-    uid: Option<&'a str>,
-    _version: Option<&'a str>,
-    _referrer: Option<&'a str>,
-}
-
-fn header_value_lossy<'a>(req: &'a HttpRequest, name: &str) -> Option<&'a str> {
-    req.headers().get(name).and_then(|val| val.to_str().ok())
-}
-
-impl<'a> TinfoilRequestHeaders<'a> {
-    pub fn from_req(req: &'a HttpRequest) -> Self {
-        let uid = header_value_lossy(req, "UID");
-        let version = header_value_lossy(req, "Version");
-        let referrer = header_value_lossy(req, "Referer");
-
-        TinfoilRequestHeaders {
-            uid,
-            _version: version,
-            _referrer: referrer,
-        }
-    }
 }
